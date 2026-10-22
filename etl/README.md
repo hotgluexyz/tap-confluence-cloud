@@ -26,11 +26,10 @@ manifest and raw validation outputs are in the repository's ignored
 - Coveo remains a shared source. Permission metadata is submitted, but security
   providers, identity membership and security trimming are NOT configured or proven.
   Never use this demo source for confidential content.
-- Hotglue authentication remains blocked by HTTP 403 `Invalid API key!`.
-  Earlier replacement-key retries were invalidated by an older personal secret
-  overriding the project secret; they do not establish that those keys were bad.
-  No hosted flow or job has been created. Use a Secret API Key or Personal API Key;
-  a private JWT signing key is not an API key.
+- Hotglue authentication succeeds in `coveo-demo-hotglue`. Earlier 403 responses
+  targeted the wrong environment, `jacob-maz-test-environment`; some retries also
+  used an older overriding personal secret. They do not establish invalid keys.
+  Hosted flow/job validation is pending.
 - Coveo search and field-management reads return 403. Indexing and custom field
   mappings still need verification with suitable privileges or the admin console.
 
