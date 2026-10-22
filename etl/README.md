@@ -46,9 +46,15 @@ Never deploy `synthetic_acl_demo.json` outside the Northstar demo flow.
   `POST`/`DELETE /wiki/rest/api/group/userByGroupId` is reflected in
   `membersByGroupId` and was pushed to the Coveo SIP with full-replace semantics
   (no page content edits).
-- **Search API blocker:** API Key 2 returns HTTP 403 for `/rest/search/v2`. Validate
-  Jacob vs Jacob No Access trimming in the Coveo admin Content Browser / search UI
-  (or a search-enabled key). Push acceptance alone does not prove query-time trimming.
+- **Search API blocker:** Platform API keys (including a key that lists
+  `SEARCH_API` / `EXECUTE_QUERY` / `IMPERSONATE` privileges) still return HTTP 403
+  for `/rest/search/v2` and search-token creation. The same key can read the
+  security cache and push documents. Validate Jacob vs Jacob No Access trimming in
+  the Coveo admin Content Browser / a dedicated Search API key / search page.
+- **Security cache (readable):** SIP entities `UP_TO_DATE` for both Atlassian
+  account IDs and the Engineering group; `jacob@hotglue.io` present on Email
+  Security Provider. `collegejakemaz@gmail.com` does not yet appear as its own
+  Email Security Provider entity (alias may need Coveo UI confirmation).
 
 ## Run the transform
 
