@@ -1,0 +1,30 @@
+send_anonymous_usage_stats: false
+project_id: tap-confluence-cloud
+default_environment: test
+requires_meltano: ">=4.0"
+environments:
+  - name: test
+plugins:
+  extractors:
+    - name: tap-confluence-cloud
+      namespace: tap_confluence_cloud
+      pip_url: -e .
+      capabilities: [state, catalog, discover, about, stream-maps, structured-logging]
+      settings:
+        - name: site_url
+        - name: email
+        - name: api_token
+          sensitive: true
+        - name: space_ids
+          kind: array
+        - name: page_ids
+          kind: array
+        - name: page_size
+          kind: integer
+        - name: max_attachment_bytes
+          kind: integer
+      settings_group_validation:
+        - [site_url, email, api_token]
+      config:
+        page_size: 100
+        max_attachment_bytes: 10485760
