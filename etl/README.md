@@ -8,30 +8,26 @@ Python 3.10. Connector repositories: `hotgluexyz/tap-confluence-cloud` and
 
 | Piece | Status |
 |---|---|
-| Confluence pages and attachments | **Real** (Northstar synthetic content in Confluence) |
-| Atlassian users (Jacob / Jacob No Access) | **Real** |
-| `Coveo Demo Engineering` group membership | **Real** (extracted live via `group_members`) |
-| Document-level ACLs in Coveo | **Simulated** in ETL when `synthetic_acl_demo` is enabled |
+| Confluence pages and attachments | **Real** |
+| Atlassian users / group membership | **Real** (via `users` / `groups` / `group_members`) |
+| Document-level ACLs in Coveo | **Real Confluence restrictions** by default |
 | Coveo security identity provider + email aliases | **Real** Push API upserts |
-| Confluence page restrictions | **Not used** (Confluence Free cannot set them) |
+| `synthetic_acl_demo` title matrix | **Optional / off** — only if Confluence cannot set restrictions |
 
-### `synthetic_acl_demo` (opt-in, default off)
+### Default path (Premium / real page restrictions)
 
-Enable with `SYNTHETIC_ACL_DEMO=true` **or** by deploying a file named
-`synthetic_acl_demo.json` (see `synthetic_acl_demo.example.json`) next to `etl.py`.
-Without either, the ETL keeps the production path that maps live Confluence
-`space_permissions` / `read_restrictions`.
+Leave `synthetic_acl_demo` **disabled**. The ETL:
 
-When enabled:
+1. Maps live `space_permissions` + `read_restrictions` onto Coveo `permissions`.
+2. Tags every identity with `securityProvider` (SIP id).
+3. Emits `SecurityIdentities` when the tap provides `users` / `groups` / `group_members`.
 
-1. Emits `SecurityIdentities` (users with Email Security Provider aliases, Engineering
-   group with full live membership — replace semantics).
-2. Assigns document ACLs from the Northstar title matrix (not Confluence restrictions).
-3. Sets `securityProvider` on every allowed identity.
-4. Attachments inherit the containing page’s demo policy.
-5. Unexpected page titles fail the job (no silent ACL inventing).
+### `synthetic_acl_demo` (opt-in, keep off with Premium)
 
-Never deploy `synthetic_acl_demo.json` outside the Northstar demo flow.
+Only for environments that cannot set page restrictions. Enable with
+`SYNTHETIC_ACL_DEMO=true` or `synthetic_acl_demo.json` `{"enabled": true}`.
+Uses a hardcoded Northstar title→principal matrix instead of Confluence ACLs.
+Never enable this in production connectors.
 
 ## Verified (HGI-11498 security sync)
 

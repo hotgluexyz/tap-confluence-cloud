@@ -252,15 +252,17 @@ def _frame(reader, stream: str) -> pd.DataFrame | None:
     return frame
 
 
-def build_security_identities(reader) -> pd.DataFrame:
+def build_security_identities(reader, *, require_demo_users: bool = False):
     """Emit Coveo SIP user aliases and group membership from live tap streams."""
     users = _frame(reader, "users")
     groups = _frame(reader, "groups")
     members = _frame(reader, "group_members")
+    if users is None and groups is None:
+        return None, None
     if users is None:
-        raise ValueError("synthetic_acl_demo requires a non-empty users stream")
+        raise ValueError("groups stream present but users stream is empty")
     if groups is None:
-        raise ValueError("synthetic_acl_demo requires a non-empty groups stream")
+        raise ValueError("users stream present but groups stream is empty")
     if members is None:
         members = pd.DataFrame(columns=["groupId", "accountId"])
 
@@ -288,34 +290,78 @@ def build_security_identities(reader) -> pd.DataFrame:
             }
         )
 
-    for required_id, required_email in DEMO_EMAIL_BY_ACCOUNT.items():
-        if required_id not in seen_users:
-            raise ValueError(f"synthetic_acl_demo missing required user {required_id}")
+    if require_demo_users:
+        for required_id in DEMO_EMAIL_BY_ACCOUNT:
+            if required_id not in seen_users:
+                raise ValueError(f"synthetic_acl_demo missing required user {required_id}")
 
     engineering = None
     for group in groups.to_dict(orient="records"):
         if group.get("name") == ENGINEERING_GROUP_NAME:
             engineering = group
             break
-    if engineering is None:
+    if engineering is None and require_demo_users:
         raise ValueError(f"synthetic_acl_demo missing group {ENGINEERING_GROUP_NAME!r}")
 
-    group_id = str(engineering["id"])
-    group_member_ids = sorted(
-        {
-            str(row["accountId"])
-            for row in members.to_dict(orient="records")
-            if str(row["groupId"]) == group_id
-        }
-    )
-    records.append(
-        {
-            "externalId": f"confluence:group:{group_id}",
-            "identity": {"name": group_id, "type": "GROUP"},
-            "members": [{"name": account_id, "type": "USER"} for account_id in group_member_ids],
-        }
-    )
-    return pd.DataFrame(records), group_id
+    engineering_group_id = None
+    if engineering is not None:
+        engineering_group_id = str(engineering["id"])
+        group_member_ids = sorted(
+            {
+                str(row["accountId"])
+                for row in members.to_dict(orient="records")
+                if str(row["groupId"]) == engineering_group_id
+            }
+        )
+        records.append(
+            {
+                "externalId": f"confluence:group:{engineering_group_id}",
+                "identity": {"name": engineering_group_id, "type": "GROUP"},
+                "members": [
+                    {"name": account_id, "type": "USER"} for account_id in group_member_ids
+                ],
+            }
+        )
+    else:
+        # Sync every configured group with its live membership.
+        for group in groups.to_dict(orient="records"):
+            group_id = str(group["id"])
+            group_member_ids = sorted(
+                {
+                    str(row["accountId"])
+                    for row in members.to_dict(orient="records")
+                    if str(row["groupId"]) == group_id
+                }
+            )
+            records.append(
+                {
+                    "externalId": f"confluence:group:{group_id}",
+                    "identity": {"name": group_id, "type": "GROUP"},
+                    "members": [
+                        {"name": account_id, "type": "USER"} for account_id in group_member_ids
+                    ],
+                }
+            )
+
+    return pd.DataFrame(records), engineering_group_id
+
+
+def _identity_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "externalId": {"type": "string"},
+            "identity": {"type": "object", "additionalProperties": True},
+            "members": {
+                "type": ["array", "null"],
+                "items": {"type": "object", "additionalProperties": True},
+            },
+            "mappings": {
+                "type": ["array", "null"],
+                "items": {"type": "object", "additionalProperties": True},
+            },
+        },
+    }
 
 
 def _write_singer(frame: pd.DataFrame, stream: str, schema: dict) -> None:
@@ -333,42 +379,35 @@ def _write_singer(frame: pd.DataFrame, stream: str, schema: dict) -> None:
 def run() -> None:
     reader = gs.Reader(INPUT_DIR, root=ROOT_DIR)
     demo = synthetic_acl_demo_enabled()
+    provider = security_provider_id()
     acl_context = None
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output = Path(OUTPUT_DIR) / "data.singer"
     if output.exists():
         output.unlink()
 
+    # Always sync identities when tap streams are present (needed for Coveo trimming).
+    identities, engineering_group_id = build_security_identities(
+        reader, require_demo_users=demo
+    )
+    if identities is not None:
+        LOGGER.info("Mapped SecurityIdentities: %d records", len(identities))
+        _write_singer(identities, "SecurityIdentities", _identity_schema())
+
     if demo:
         LOGGER.warning(
             "SYNTHETIC_ACL_DEMO enabled: document ACLs are demo policies, "
             "not live Confluence page restrictions"
         )
-        identities, engineering_group_id = build_security_identities(reader)
-        LOGGER.info("Mapped SecurityIdentities: %d records", len(identities))
-        identity_schema = {
-            "type": "object",
-            "properties": {
-                "externalId": {"type": "string"},
-                "identity": {"type": "object", "additionalProperties": True},
-                "members": {
-                    "type": ["array", "null"],
-                    "items": {"type": "object", "additionalProperties": True},
-                },
-                "mappings": {
-                    "type": ["array", "null"],
-                    "items": {"type": "object", "additionalProperties": True},
-                },
-            },
-        }
-        _write_singer(identities, "SecurityIdentities", identity_schema)
+        if engineering_group_id is None:
+            raise ValueError("synthetic_acl_demo requires Coveo Demo Engineering group")
         pages = _frame(reader, "pages")
         if pages is None:
             raise ValueError("No Confluence pages to export")
         page_titles = {str(row["id"]): row["title"] for row in pages.to_dict(orient="records")}
         acl_context = {
             "engineering_group_id": engineering_group_id,
-            "provider": security_provider_id(),
+            "provider": provider,
             "page_titles": page_titles,
         }
 
@@ -377,7 +416,28 @@ def run() -> None:
         frame = _frame(reader, stream)
         if frame is None:
             continue
-        mapped = transform(frame, stream, acl_context=acl_context)
+        if demo:
+            mapped = transform(frame, stream, acl_context=acl_context)
+        else:
+            # Live Confluence restrictions/space perms, tagged with Coveo SIP name.
+            mapped = transform(frame, stream, acl_context=None)
+            if not mapped.empty:
+                mapped = mapped.copy()
+                mapped["permissions"] = mapped["permissions"].map(
+                    lambda sets: [
+                        {
+                            **permission_set,
+                            "allowedPermissions": [
+                                {**identity, "securityProvider": provider}
+                                for identity in permission_set.get("allowedPermissions", [])
+                            ],
+                        }
+                        for permission_set in sets
+                    ]
+                )
+                mapped["confluencepermissions"] = mapped["permissions"].map(
+                    lambda sets: json.dumps(sets, separators=(",", ":"))
+                )
         LOGGER.info("Mapped %s: %d records", stream, len(mapped))
         frames.append(mapped)
     if not frames:
