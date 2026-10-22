@@ -1,0 +1,3 @@
+gluestick==3.0.21
+pandas>=2.0,<2.2
+numpy>=1.24,<2
