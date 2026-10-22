@@ -33,12 +33,22 @@ When enabled:
 
 Never deploy `synthetic_acl_demo.json` outside the Northstar demo flow.
 
-## Verified
+## Verified (HGI-11498 security sync)
 
-- Content pipeline: 8 pages + 3 attachments → Coveo Documents (prior job).
-- Secured source `hotgluedemoe59eep2q-wwpem6tm2h6z2dy3vtjgkbkfiu` with SIP
-  `Northstar Confluence Demo SIP`.
-- Live Push accepted security identities and a secured document (HTTP 202).
+- Engineering group ID: `4e8cd076-10e6-4d42-b317-b850b5b0057a` (`Coveo Demo Engineering`).
+- Tap extracted `users=2`, `groups=1`, `group_members=1` (Jacob only at baseline),
+  `pages=8`, `attachments=3`.
+- ETL `synthetic_acl_demo` emitted `SecurityIdentities=3` then `Documents=11` with
+  title-based ACLs + `securityProvider`.
+- `target-coveo` (feature/hgi-11498) accepted all identities and documents (HTTP 202).
+  Secured source document count reached **11**.
+- Atlassian membership grant/revoke via
+  `POST`/`DELETE /wiki/rest/api/group/userByGroupId` is reflected in
+  `membersByGroupId` and was pushed to the Coveo SIP with full-replace semantics
+  (no page content edits).
+- **Search API blocker:** API Key 2 returns HTTP 403 for `/rest/search/v2`. Validate
+  Jacob vs Jacob No Access trimming in the Coveo admin Content Browser / search UI
+  (or a search-enabled key). Push acceptance alone does not prove query-time trimming.
 
 ## Run the transform
 
