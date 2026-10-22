@@ -1,7 +1,7 @@
 """Pages, attachments, and identity streams for security sync."""
 
 import base64
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from urllib.parse import quote
 
 from tap_confluence_cloud.client import ConfluenceCloudStream
@@ -273,7 +273,7 @@ class GroupMembersStream(ConfluenceCloudStream):
     name = "group_members"
     parent_stream_type = GroupsStream
     path = "/group-members"
-    primary_keys = ["groupId", "accountId"]
+    primary_keys: ClassVar[list[str]] = ["groupId", "accountId"]
     schema = {
         "type": "object",
         "properties": {
@@ -286,10 +286,6 @@ class GroupMembersStream(ConfluenceCloudStream):
             "accountStatus": {"type": ["string", "null"]},
         },
     }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.primary_keys = ["groupId", "accountId"]
 
     def get_records(self, context):
         group_id = context["id"]

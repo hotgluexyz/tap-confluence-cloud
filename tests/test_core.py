@@ -22,11 +22,53 @@ CONFIG = {
 }
 
 
+def _identity_api_response(path, query):
+    if path == "/wiki/rest/api/user":
+        account_id = query["accountId"][0]
+        emails = {"u-alice": "alice@example.test", "u-bob": ""}
+        return {
+            "accountId": account_id,
+            "email": emails.get(account_id, ""),
+            "displayName": account_id,
+            "accountStatus": "active",
+            "accountType": "atlassian",
+        }
+    if path == "/wiki/rest/api/group/picker":
+        return {
+            "results": [
+                {
+                    "id": "group-eng",
+                    "name": "Coveo Demo Engineering",
+                    "managedBy": "ADMINS",
+                    "usageType": "USERBASE_GROUP",
+                }
+            ]
+        }
+    if path.endswith("/membersByGroupId"):
+        return {
+            "results": [
+                {
+                    "accountId": "u-alice",
+                    "email": "alice@example.test",
+                    "displayName": "Alice",
+                    "accountStatus": "active",
+                }
+            ],
+            "start": 0,
+            "limit": 2,
+            "size": 1,
+        }
+    return None
+
+
 def api_response(request, *, fail_acl=False):
     """Asymmetric pages, independently paginated ACLs, and an inherited attachment."""
     assert request.headers["Authorization"].startswith("Basic ")
     path = urlparse(request.url).path
     query = parse_qs(urlparse(request.url).query)
+    identity = _identity_api_response(path, query)
+    if identity is not None:
+        return 200, {"Content-Type": "application/json"}, json.dumps(identity)
     if path == "/wiki/api/v2/pages":
         assert query["body-format"] == ["storage"]
         assert query["id"] == ["11", "22"]
@@ -92,41 +134,6 @@ def api_response(request, *, fail_acl=False):
             ]
     elif path == "/wiki/download/attachments/22/guide.pdf":
         return 200, {"Content-Type": "application/pdf"}, b"%PDF-1.4\ndemo\n"
-    elif path == "/wiki/rest/api/user":
-        account_id = query["accountId"][0]
-        emails = {"u-alice": "alice@example.test", "u-bob": ""}
-        result = {
-            "accountId": account_id,
-            "email": emails.get(account_id, ""),
-            "displayName": account_id,
-            "accountStatus": "active",
-            "accountType": "atlassian",
-        }
-    elif path == "/wiki/rest/api/group/picker":
-        result = {
-            "results": [
-                {
-                    "id": "group-eng",
-                    "name": "Coveo Demo Engineering",
-                    "managedBy": "ADMINS",
-                    "usageType": "USERBASE_GROUP",
-                }
-            ]
-        }
-    elif path.endswith("/membersByGroupId"):
-        result = {
-            "results": [
-                {
-                    "accountId": "u-alice",
-                    "email": "alice@example.test",
-                    "displayName": "Alice",
-                    "accountStatus": "active",
-                }
-            ],
-            "start": 0,
-            "limit": 2,
-            "size": 1,
-        }
     else:
         raise AssertionError(f"Unexpected API path {path}")
     return 200, {"Content-Type": "application/json"}, json.dumps(result)
