@@ -176,7 +176,7 @@ class UsersStream(ConfluenceCloudStream):
 
     name = "users"
     path = "/users"
-    schema = {
+    schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "id": {"type": "string"},
@@ -208,7 +208,7 @@ class GroupsStream(ConfluenceCloudStream):
 
     name = "groups"
     path = "/groups"
-    schema = {
+    schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "id": {"type": "string"},
@@ -274,7 +274,7 @@ class GroupMembersStream(ConfluenceCloudStream):
     parent_stream_type = GroupsStream
     path = "/group-members"
     primary_keys: ClassVar[list[str]] = ["groupId", "accountId"]
-    schema = {
+    schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "id": {"type": "string"},
