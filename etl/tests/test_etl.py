@@ -118,6 +118,7 @@ def test_singer_export_preserves_binary_and_nested_permissions(tmp_path, monkeyp
     monkeypatch.setattr(etl, "ROOT_DIR", str(tmp_path))
     monkeypatch.setattr(etl, "INPUT_DIR", str(input_dir))
     monkeypatch.setattr(etl, "OUTPUT_DIR", str(tmp_path / "etl-output"))
+    monkeypatch.setenv("SYNTHETIC_ACL_DEMO", "false")
     etl.run()
     messages = [
         json.loads(line) for line in (tmp_path / "etl-output/data.singer").read_text().splitlines()
@@ -131,3 +132,89 @@ def test_singer_export_preserves_binary_and_nested_permissions(tmp_path, monkeyp
     assert records[0]["permissions"] == records[1]["permissions"]
     assert isinstance(records[0]["permissions"][0]["allowedPermissions"], list)
     assert records[1]["parentId"] == records[0]["documentId"]
+
+
+def test_synthetic_acl_demo_emits_identities_and_title_policies(tmp_path, monkeypatch):
+    input_dir = tmp_path / "sync-output"
+    input_dir.mkdir()
+    source = {
+        **page(),
+        "title": "[Coveo Demo] Atlas API ingestion technical guide",
+        "id": "655382",
+    }
+    pd.DataFrame([source]).to_parquet(input_dir / "pages.parquet")
+    pd.DataFrame(
+        [
+            {
+                "id": etl.JACOB_ACCOUNT_ID,
+                "accountId": etl.JACOB_ACCOUNT_ID,
+                "email": etl.JACOB_EMAIL,
+                "displayName": "Jacob Mazurkiewicz",
+            },
+            {
+                "id": etl.JACOB_NO_ACCESS_ACCOUNT_ID,
+                "accountId": etl.JACOB_NO_ACCESS_ACCOUNT_ID,
+                "email": "",
+                "displayName": "Jacob No Access",
+            },
+        ]
+    ).to_parquet(input_dir / "users.parquet")
+    pd.DataFrame(
+        [{"id": "group-eng", "name": "Coveo Demo Engineering"}]
+    ).to_parquet(input_dir / "groups.parquet")
+    pd.DataFrame(
+        [
+            {
+                "id": "group-eng:" + etl.JACOB_ACCOUNT_ID,
+                "groupId": "group-eng",
+                "accountId": etl.JACOB_ACCOUNT_ID,
+            }
+        ]
+    ).to_parquet(input_dir / "group_members.parquet")
+    monkeypatch.setattr(etl, "ROOT_DIR", str(tmp_path))
+    monkeypatch.setattr(etl, "INPUT_DIR", str(input_dir))
+    monkeypatch.setattr(etl, "OUTPUT_DIR", str(tmp_path / "etl-output"))
+    monkeypatch.setenv("SYNTHETIC_ACL_DEMO", "true")
+    monkeypatch.setenv("COVEO_SECURITY_PROVIDER_ID", "Northstar Confluence Demo SIP")
+    etl.run()
+    messages = [
+        json.loads(line) for line in (tmp_path / "etl-output/data.singer").read_text().splitlines()
+    ]
+    streams = [m["stream"] for m in messages if m["type"] == "SCHEMA"]
+    assert streams == ["SecurityIdentities", "Documents"]
+    identities = [
+        m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "SecurityIdentities"
+    ]
+    documents = [
+        m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "Documents"
+    ]
+    assert len(identities) == 3
+    assert identities[1]["mappings"][0]["name"] == etl.JACOB_NO_ACCESS_EMAIL
+    assert identities[2]["identity"] == {"name": "group-eng", "type": "GROUP"}
+    assert identities[2]["members"] == [{"name": etl.JACOB_ACCOUNT_ID, "type": "USER"}]
+    assert documents[0]["permissions"] == [
+        {
+            "allowAnonymous": False,
+            "allowedPermissions": [
+                {
+                    "identity": "group-eng",
+                    "identityType": "Group",
+                    "securityProvider": "Northstar Confluence Demo SIP",
+                }
+            ],
+        }
+    ]
+
+
+def test_synthetic_acl_demo_rejects_unknown_titles(monkeypatch):
+    monkeypatch.setenv("SYNTHETIC_ACL_DEMO", "true")
+    with pytest.raises(ValueError, match="unexpected title"):
+        etl.transform(
+            pd.DataFrame([{**page(), "title": "Not a demo page"}]),
+            "pages",
+            acl_context={
+                "engineering_group_id": "group-eng",
+                "provider": "Northstar Confluence Demo SIP",
+                "page_titles": {"17": "Not a demo page"},
+            },
+        )

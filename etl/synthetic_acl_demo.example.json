@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "security_provider_id": "Northstar Confluence Demo SIP",
+  "note": "Copy to synthetic_acl_demo.json only for the Northstar demo Hotglue flow deploy."
+}

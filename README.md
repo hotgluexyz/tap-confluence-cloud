@@ -12,6 +12,9 @@ Generated from Hotglue's tap cookiecutter. Requires Python 3.10.
 | `api_token` | yes | Sensitive API token for that account |
 | `space_ids` | no | Array of space IDs (at most 100); omitted means all accessible spaces |
 | `page_ids` | no | Array of page IDs (at most 250); use to isolate demo content |
+| `user_account_ids` | no | Atlassian account IDs to extract for security identity sync |
+| `group_ids` | no | Confluence group UUIDs to extract for security identity sync |
+| `group_names` | no | Exact group names to resolve (e.g. `Coveo Demo Engineering`) |
 | `page_size` | no | Cursor/offset page size, 1–250, default 100 |
 | `max_attachment_bytes` | no | Maximum attachment size, default 10 MiB; oversized files fail the sync |
 
@@ -41,6 +44,11 @@ incremental watermark; deletion detection is not implemented.
   and profile, timestamps, version, URL, labels, properties, space ID, parent IDs.
 - `attachments`: child stream `/pages/{id}/attachments`, attachment metadata plus
   `content_base64` containing the actual bytes. Permissions come from the containing page.
+- `users`: configured `user_account_ids` via v1 `/user` (accountId, email, displayName).
+- `groups`: configured `group_ids` / `group_names` via v1 group picker.
+- `group_members`: child of `groups`; live membership via
+  `/group/{groupId}/membersByGroupId`. Membership denials fail the sync rather than
+  inventing members.
 
 V2 collections follow `_links.next` or the HTTP `Link` cursor. Read restrictions use
 the v1 `/content/{id}/restriction/byOperation/read` API, paginating both users and groups.

@@ -4,71 +4,54 @@ Write direction only: Confluence tap → official target-parquet → `etl.py` �
 Python 3.10. Connector repositories: `hotgluexyz/tap-confluence-cloud` and
 `hotgluexyz/target-coveo`.
 
-## Verified locally and in a hosted Hotglue job
+## What is real vs simulated
 
-On October 22, 2026 the tap extracted 8 synthetic Northstar Cloud pages and 3
-attachments (PDF, DOCX and text). Official target-parquet serialized the records;
-the ETL mapped all 11; Coveo accepted all 11 with HTTP 202 and no failed records.
-The hosted write job also reached `JOB_COMPLETED`, with the downloaded export
-summary reporting `Documents: success=11, fail=0`. All 11 export bookmarks record
-HTTP 202. The ETL and requirements are deployed under the flow's default tenant
-for the Coveo connector; downloaded copies match the repository runtime files.
-Acceptance is not proof of indexing, text extraction or search visibility.
+| Piece | Status |
+|---|---|
+| Confluence pages and attachments | **Real** (Northstar synthetic content in Confluence) |
+| Atlassian users (Jacob / Jacob No Access) | **Real** |
+| `Coveo Demo Engineering` group membership | **Real** (extracted live via `group_members`) |
+| Document-level ACLs in Coveo | **Simulated** in ETL when `synthetic_acl_demo` is enabled |
+| Coveo security identity provider + email aliases | **Real** Push API upserts |
+| Confluence page restrictions | **Not used** (Confluence Free cannot set them) |
 
-The pages cover SAML troubleshooting, API ingestion, incident response, disaster
-recovery, onboarding and search relevance. Seed content is fictional. The seed
-manifest and raw validation outputs are in the repository's ignored
-`.secrets/coveo-demo/` directory; final pipeline outputs are under `final/`.
+### `synthetic_acl_demo` (opt-in, default off)
 
-## Permissions and remaining gates
+Enable with `SYNTHETIC_ACL_DEMO=true` **or** by deploying a file named
+`synthetic_acl_demo.json` (see `synthetic_acl_demo.example.json`) next to `etl.py`.
+Without either, the ETL keeps the production path that maps live Confluence
+`space_permissions` / `read_restrictions`.
 
-- Live records preserve raw space permissions and ancestor/page read restrictions.
-  Attachments inherit the containing page's metadata.
-- Actual direct restrictions on these pages are empty: Confluence rejected attempts
-  to set them with HTTP 403. Each demo page now explicitly labels restriction
-  scenarios as illustrative. Tests cover nonempty user/group/inherited restrictions.
-- Coveo remains a shared source. Permission metadata is submitted, but security
-  providers, identity membership and security trimming are NOT configured or proven.
-  Never use this demo source for confidential content.
-- Hotglue authentication succeeds in `coveo-demo-hotglue`. Earlier 403 responses
-  targeted the wrong environment, `jacob-maz-test-environment`; some retries also
-  used an older overriding personal secret. They do not establish invalid keys.
-  Hosted extraction, transformation and Push API delivery are verified.
-- Coveo search and field-management reads return 403. Indexing and custom field
-  mappings still need verification with suitable privileges or the admin console.
+When enabled:
+
+1. Emits `SecurityIdentities` (users with Email Security Provider aliases, Engineering
+   group with full live membership — replace semantics).
+2. Assigns document ACLs from the Northstar title matrix (not Confluence restrictions).
+3. Sets `securityProvider` on every allowed identity.
+4. Attachments inherit the containing page’s demo policy.
+5. Unexpected page titles fail the job (no silent ACL inventing).
+
+Never deploy `synthetic_acl_demo.json` outside the Northstar demo flow.
+
+## Verified
+
+- Content pipeline: 8 pages + 3 attachments → Coveo Documents (prior job).
+- Secured source `hotgluedemoe59eep2q-wwpem6tm2h6z2dy3vtjgkbkfiu` with SIP
+  `Northstar Confluence Demo SIP`.
+- Live Push accepted security identities and a secured document (HTTP 202).
 
 ## Run the transform
 
-Install `requirements.txt` in a separate Python 3.10 virtualenv. Keep the official
-target-parquet environment separate because its older dependencies conflict.
-
 ```bash
 ROOT_DIR=/absolute/path/to/job-root JOB_TYPE=write python etl.py
-uvx --with tox-uv tox -e py310,lint
+# Demo mode:
+SYNTHETIC_ACL_DEMO=true COVEO_SECURITY_PROVIDER_ID='Northstar Confluence Demo SIP' \
+  ROOT_DIR=/absolute/path/to/job-root python etl.py
+PYTHONPATH=. pytest -q
 ```
 
-The job root contains `sync-output/*.parquet`; output is `etl-output/data.singer`.
-Check where target-parquet actually writes files before running ETL: the installed
-0.0.21 version wrote to the working directory despite its filepath setting.
-Deploy only `etl.py` and `requirements.txt` from a clean staging directory.
+Deploy `etl.py`, `requirements.txt`, and (for Northstar only) `synthetic_acl_demo.json`.
 
-The transform emits stable ID-based document URLs, titles, HTML or base64 file
-bytes, author, dates, labels/properties, and permissions. Raw ACL rules are retained
-as `confluencepermissionmetadata`; mapped permission sets are also serialized in
-`confluencepermissions`. Create/map custom Coveo fields before demonstrating them
-in search results. Missing/incomplete ACL data fails rather than granting public access.
-
-For another flow, configure Confluence as the v2 source and Coveo as connector,
-select only the demo page IDs and both streams, deploy the write ETL, run discovery,
-save the source field map, and run one write job. Validate all 11 target bookmarks,
-then verify page and attachment phrases in Coveo's Content Browser/search.
-
-The tap is full-table and does not detect deletions. The target supports individual
-explicit deletes, but this ETL emits upserts only. Inline attachments are limited
-by the target to 5 MiB. Neither connector is a complete replacement for all
-features of Coveo's native Confluence connector.
-
-`seed.py` requires requests, python-docx and reportlab in addition to runtime
-dependencies. It reads `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN`, reuses exact
-demo titles, and creates only missing demo content. Use `--skip-restrictions` when
-the account cannot set restrictions; never treat intended scenarios as actual ACLs.
+Target config must use the secured Push source, API key with identity+document push
+rights, and `security_identity_provider_id`. Tap config should include
+`user_account_ids`, `group_names` (or `group_ids`), plus the demo `page_ids`.

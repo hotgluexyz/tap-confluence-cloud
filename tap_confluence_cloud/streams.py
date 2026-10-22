@@ -1,4 +1,4 @@
-"""Pages and their attachments, including complete read-restriction metadata."""
+"""Pages, attachments, and identity streams for security sync."""
 
 import base64
 from typing import Any, cast
@@ -169,3 +169,156 @@ class AttachmentsStream(ConfluenceCloudStream):
         )
         row["authorId"] = row.get("version", {}).get("authorId")
         return row
+
+
+class UsersStream(ConfluenceCloudStream):
+    """Fetch configured Atlassian users by account ID for Coveo identity aliases."""
+
+    name = "users"
+    path = "/users"
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "accountId": {"type": "string"},
+            "email": {"type": ["string", "null"]},
+            "displayName": {"type": ["string", "null"]},
+            "accountStatus": {"type": ["string", "null"]},
+            "accountType": {"type": ["string", "null"]},
+        },
+    }
+
+    def get_records(self, context):
+        for account_id in self.config.get("user_account_ids", []):
+            user = self.get_response(
+                "/wiki/rest/api/user", {"accountId": account_id}
+            ).json()
+            yield {
+                "id": user["accountId"],
+                "accountId": user["accountId"],
+                "email": user.get("email") or None,
+                "displayName": user.get("displayName"),
+                "accountStatus": user.get("accountStatus"),
+                "accountType": user.get("accountType"),
+            }
+
+
+class GroupsStream(ConfluenceCloudStream):
+    """Resolve configured Confluence groups by ID or exact name."""
+
+    name = "groups"
+    path = "/groups"
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "managedBy": {"type": ["string", "null"]},
+            "usageType": {"type": ["string", "null"]},
+        },
+    }
+
+    def _groups(self):
+        seen = {}
+        for group_id in self.config.get("group_ids", []):
+            seen[group_id] = {"id": group_id, "name": None}
+        for name in self.config.get("group_names", []):
+            matches = [
+                group
+                for group in self.get_response(
+                    "/wiki/rest/api/group/picker", {"query": name}
+                ).json()["results"]
+                if group["name"] == name
+            ]
+            if not matches:
+                raise ValueError(f"Confluence group not found by name: {name}")
+            group = matches[0]
+            seen[group["id"]] = {
+                "id": group["id"],
+                "name": group["name"],
+                "managedBy": group.get("managedBy"),
+                "usageType": group.get("usageType"),
+            }
+        for group_id, partial in list(seen.items()):
+            if partial.get("name"):
+                continue
+            matches = [
+                group
+                for group in self.get_response(
+                    "/wiki/rest/api/group/picker", {"query": group_id}
+                ).json()["results"]
+                if group["id"] == group_id
+            ]
+            if not matches:
+                raise ValueError(f"Confluence group not found by id: {group_id}")
+            group = matches[0]
+            seen[group_id] = {
+                "id": group["id"],
+                "name": group["name"],
+                "managedBy": group.get("managedBy"),
+                "usageType": group.get("usageType"),
+            }
+        return list(seen.values())
+
+    def get_records(self, context):
+        yield from self._groups()
+
+    def get_child_context(self, record, context):
+        return {"id": record["id"], "name": record["name"]}
+
+
+class GroupMembersStream(ConfluenceCloudStream):
+    """Live membership for each configured group (full replace on each sync)."""
+
+    name = "group_members"
+    parent_stream_type = GroupsStream
+    path = "/group-members"
+    primary_keys = ["groupId", "accountId"]
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "groupId": {"type": "string"},
+            "groupName": {"type": ["string", "null"]},
+            "accountId": {"type": "string"},
+            "email": {"type": ["string", "null"]},
+            "displayName": {"type": ["string", "null"]},
+            "accountStatus": {"type": ["string", "null"]},
+        },
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.primary_keys = ["groupId", "accountId"]
+
+    def get_records(self, context):
+        group_id = context["id"]
+        start = 0
+        limit = self.config["page_size"]
+        while True:
+            response = self.get_response(
+                f"/wiki/rest/api/group/{quote(group_id, safe='')}/membersByGroupId",
+                {"start": start, "limit": limit},
+            )
+            if response.status_code in (401, 403):
+                raise ValueError(
+                    "Confluence denied group membership extraction for "
+                    f"{group_id}; Atlassian Free/admin permissions may block "
+                    "membersByGroupId. Refusing to simulate membership."
+                )
+            data = response.json()
+            results = data["results"]
+            for member in results:
+                account_id = member["accountId"]
+                yield {
+                    "id": f"{group_id}:{account_id}",
+                    "groupId": group_id,
+                    "groupName": context.get("name"),
+                    "accountId": account_id,
+                    "email": member.get("email") or None,
+                    "displayName": member.get("displayName"),
+                    "accountStatus": member.get("accountStatus"),
+                }
+            if len(results) < limit:
+                break
+            start += limit

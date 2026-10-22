@@ -17,6 +17,8 @@ CONFIG = {
     "api_token": "test-token",
     "page_size": 2,
     "page_ids": ["11", "22"],
+    "user_account_ids": ["u-alice", "u-bob"],
+    "group_names": ["Coveo Demo Engineering"],
 }
 
 
@@ -90,6 +92,41 @@ def api_response(request, *, fail_acl=False):
             ]
     elif path == "/wiki/download/attachments/22/guide.pdf":
         return 200, {"Content-Type": "application/pdf"}, b"%PDF-1.4\ndemo\n"
+    elif path == "/wiki/rest/api/user":
+        account_id = query["accountId"][0]
+        emails = {"u-alice": "alice@example.test", "u-bob": ""}
+        result = {
+            "accountId": account_id,
+            "email": emails.get(account_id, ""),
+            "displayName": account_id,
+            "accountStatus": "active",
+            "accountType": "atlassian",
+        }
+    elif path == "/wiki/rest/api/group/picker":
+        result = {
+            "results": [
+                {
+                    "id": "group-eng",
+                    "name": "Coveo Demo Engineering",
+                    "managedBy": "ADMINS",
+                    "usageType": "USERBASE_GROUP",
+                }
+            ]
+        }
+    elif path.endswith("/membersByGroupId"):
+        result = {
+            "results": [
+                {
+                    "accountId": "u-alice",
+                    "email": "alice@example.test",
+                    "displayName": "Alice",
+                    "accountStatus": "active",
+                }
+            ],
+            "start": 0,
+            "limit": 2,
+            "size": 1,
+        }
     else:
         raise AssertionError(f"Unexpected API path {path}")
     return 200, {"Content-Type": "application/json"}, json.dumps(result)
@@ -102,13 +139,23 @@ def test_sync_preserves_content_paginated_restrictions_and_attachment_inheritanc
     )
     tap = TapConfluenceCloud(config=CONFIG)
     catalog = tap.catalog_dict
-    assert {s["stream"] for s in catalog["streams"]} == {"pages", "attachments"}
-    assert all(s["key_properties"] == ["id"] for s in catalog["streams"])
+    assert {s["stream"] for s in catalog["streams"]} == {
+        "pages",
+        "attachments",
+        "users",
+        "groups",
+        "group_members",
+    }
     stdout, _ = tap_sync_test(tap)
     messages = [json.loads(line) for line in stdout.getvalue().splitlines()]
     pages = [m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "pages"]
     attachments = [
         m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "attachments"
+    ]
+    users = [m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "users"]
+    groups = [m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "groups"]
+    members = [
+        m["record"] for m in messages if m["type"] == "RECORD" and m["stream"] == "group_members"
     ]
     assert [p["id"] for p in pages] == ["11", "22"]
     assert pages[1]["body"]["storage"]["value"] == "<p>Body 22</p>"
@@ -127,6 +174,27 @@ def test_sync_preserves_content_paginated_restrictions_and_attachment_inheritanc
     assert attachments[0]["read_restrictions"] == pages[1]["read_restrictions"]
     assert attachments[0]["space_permissions"] == pages[1]["space_permissions"]
     assert attachments[0]["permissions_complete"] is True
+    assert [user["accountId"] for user in users] == ["u-alice", "u-bob"]
+    assert users[1]["email"] is None
+    assert groups == [
+        {
+            "id": "group-eng",
+            "name": "Coveo Demo Engineering",
+            "managedBy": "ADMINS",
+            "usageType": "USERBASE_GROUP",
+        }
+    ]
+    assert members == [
+        {
+            "id": "group-eng:u-alice",
+            "groupId": "group-eng",
+            "groupName": "Coveo Demo Engineering",
+            "accountId": "u-alice",
+            "email": "alice@example.test",
+            "displayName": "Alice",
+            "accountStatus": "active",
+        }
+    ]
 
 
 @responses.activate
