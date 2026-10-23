@@ -98,16 +98,46 @@ def identity(principal_type, principal_id, *, provider=None):
     return entry
 
 
-def _concrete_space_readers(space_permissions, *, provider=None):
-    """Map space read grants to Coveo identities, omitting unresolved access-class/role VirtualGroups."""
+def _concrete_space_readers(space_permissions, *, provider=None, licensed_user_ids=None):
+    """Map space read grants to Coveo identities.
+
+    Confluence ``access-class`` / ``role`` principals become Coveo VirtualGroups that we
+    never sync. ``ALL_LICENSED_USERS`` is expanded to the synced ``users`` stream account
+    IDs (authoritative for this tap). Other access-class/role principals are omitted.
+    """
+    licensed_user_ids = list(licensed_user_ids or [])
     readers = []
+    seen = set()
+    saw_all_licensed = False
+
+    def _add(entry):
+        key = (entry["identityType"], entry["identity"])
+        if key in seen:
+            return
+        seen.add(key)
+        readers.append(entry)
+
     for permission in space_permissions:
         if permission["operation"] != {"key": "read", "targetType": "space"}:
             continue
         principal = permission["principal"]
-        if principal["type"] in ("access-class", "role"):
+        principal_type = principal["type"]
+        if principal_type == "access-class" and principal["id"] == "ALL_LICENSED_USERS":
+            saw_all_licensed = True
             continue
-        readers.append(identity(principal["type"], principal["id"], provider=provider))
+        if principal_type in ("access-class", "role"):
+            continue
+        _add(identity(principal_type, principal["id"], provider=provider))
+
+    if saw_all_licensed:
+        if not licensed_user_ids:
+            raise ValueError(
+                "Space grants ALL_LICENSED_USERS but users stream is empty; "
+                "refusing unresolved VirtualGroup"
+            )
+        for account_id in licensed_user_ids:
+            _add(identity("user", account_id, provider=provider))
+
     if not readers:
         raise ValueError(
             "No concrete space readers after omitting access-class/role principals; "
@@ -116,9 +146,11 @@ def _concrete_space_readers(space_permissions, *, provider=None):
     return readers
 
 
-def permissions(space_permissions, restrictions, *, provider=None):
+def permissions(space_permissions, restrictions, *, provider=None, licensed_user_ids=None):
     """Coveo simplified permission sets intersect space + every ancestor/page gate."""
-    readers = _concrete_space_readers(space_permissions, provider=provider)
+    readers = _concrete_space_readers(
+        space_permissions, provider=provider, licensed_user_ids=licensed_user_ids
+    )
     sets = [{"allowAnonymous": False, "allowedPermissions": readers}]
     for layer in restrictions:
         allowed = [
@@ -161,7 +193,13 @@ def synthetic_permissions(title: str, engineering_group_id: str, provider: str) 
     return [{"allowAnonymous": False, "allowedPermissions": allowed}]
 
 
-def transform(df: pd.DataFrame, stream: str, *, acl_context: dict | None = None) -> pd.DataFrame:
+def transform(
+    df: pd.DataFrame,
+    stream: str,
+    *,
+    acl_context: dict | None = None,
+    licensed_user_ids: list[str] | None = None,
+) -> pd.DataFrame:
     if stream not in ("pages", "attachments"):
         raise ValueError(f"Unexpected input stream: {stream}")
     documents = []
@@ -196,7 +234,9 @@ def transform(df: pd.DataFrame, stream: str, *, acl_context: dict | None = None)
                 "policy_title": demo_title_key(page_title),
             }
         else:
-            permission_sets = permissions(space, restrictions)
+            permission_sets = permissions(
+                space, restrictions, licensed_user_ids=licensed_user_ids
+            )
             permission_metadata = {
                 "space_permissions": space,
                 "read_restrictions": restrictions,
@@ -408,6 +448,13 @@ def run() -> None:
         LOGGER.info("Mapped SecurityIdentities: %d records", len(identities))
         _write_singer(identities, "SecurityIdentities", _identity_schema())
 
+    users_frame = _frame(reader, "users")
+    licensed_user_ids = (
+        [str(row["accountId"]) for row in users_frame.to_dict(orient="records")]
+        if users_frame is not None
+        else []
+    )
+
     if demo:
         LOGGER.warning(
             "SYNTHETIC_ACL_DEMO enabled: document ACLs are demo policies, "
@@ -434,7 +481,12 @@ def run() -> None:
             mapped = transform(frame, stream, acl_context=acl_context)
         else:
             # Live Confluence restrictions/space perms, tagged with Coveo SIP name.
-            mapped = transform(frame, stream, acl_context=None)
+            mapped = transform(
+                frame,
+                stream,
+                acl_context=None,
+                licensed_user_ids=licensed_user_ids,
+            )
             if not mapped.empty:
                 mapped = mapped.copy()
                 mapped["permissions"] = mapped["permissions"].map(

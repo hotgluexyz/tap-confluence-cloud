@@ -92,7 +92,7 @@ def test_empty_page_body_falls_back_to_title_for_coveo_data():
     assert result["data"] == "Untitled live doc 2026-10-22"
 
 
-def test_access_class_virtual_groups_omitted_when_concrete_readers_exist():
+def test_all_licensed_users_expands_to_synced_users_and_skips_admins_class():
     space = [
         {
             "principal": {"type": "access-class", "id": "ALL_LICENSED_USERS"},
@@ -106,12 +106,12 @@ def test_access_class_virtual_groups_omitted_when_concrete_readers_exist():
             "principal": {"type": "user", "id": "712020:jacob"},
             "operation": {"key": "read", "targetType": "space"},
         },
-        {
-            "principal": {"type": "user", "id": "712020:no-access"},
-            "operation": {"key": "read", "targetType": "space"},
-        },
     ]
-    sets = etl.permissions(space, [])
+    sets = etl.permissions(
+        space,
+        [],
+        licensed_user_ids=["712020:jacob", "712020:no-access"],
+    )
     assert sets == [
         {
             "allowAnonymous": False,
@@ -123,14 +123,37 @@ def test_access_class_virtual_groups_omitted_when_concrete_readers_exist():
     ]
 
 
-def test_access_class_only_space_permissions_fail_closed():
+def test_page_restriction_still_excludes_non_members_after_licensed_expansion():
     space = [
         {
             "principal": {"type": "access-class", "id": "ALL_LICENSED_USERS"},
             "operation": {"key": "read", "targetType": "space"},
         }
     ]
-    with pytest.raises(ValueError, match="No concrete space readers"):
+    restrictions = [
+        {"contentId": "1", "users": [{"accountId": "712020:jacob"}], "groups": []}
+    ]
+    sets = etl.permissions(
+        space,
+        restrictions,
+        licensed_user_ids=["712020:jacob", "712020:no-access"],
+    )
+    assert len(sets) == 2
+    space_ids = {a["identity"] for a in sets[0]["allowedPermissions"]}
+    assert space_ids == {"712020:jacob", "712020:no-access"}
+    assert sets[1]["allowedPermissions"] == [
+        {"identity": "712020:jacob", "identityType": "User"}
+    ]
+
+
+def test_access_class_only_space_permissions_fail_closed_without_users_stream():
+    space = [
+        {
+            "principal": {"type": "access-class", "id": "ALL_LICENSED_USERS"},
+            "operation": {"key": "read", "targetType": "space"},
+        }
+    ]
+    with pytest.raises(ValueError, match="users stream is empty"):
         etl.permissions(space, [])
 
 

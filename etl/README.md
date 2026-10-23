@@ -19,7 +19,7 @@ Python 3.10. Connector repositories: `hotgluexyz/tap-confluence-cloud` and
 Leave `synthetic_acl_demo` **disabled**. The ETL:
 
 1. Maps live `space_permissions` + `read_restrictions` onto Coveo `permissions`.
-2. Omits Confluence `access-class` / `role` principals (Coveo VirtualGroups that are never synced). Space ACLs must include concrete users and/or groups (Jacob, Jacob No Access, Coveo Demo Engineering). If only access-class grants remain, the ETL fails closed.
+2. Expands Confluence `ALL_LICENSED_USERS` to the synced `users` stream account IDs (so Jacob No Access keeps space-level access). Other `access-class` / `role` principals are omitted. Page restrictions still add intersecting permission sets, so Jacob-only pages stay hidden from non-members.
 3. Tags every identity with `securityProvider` (SIP id).
 4. Emits `SecurityIdentities` when the tap provides `users` / `groups` / `group_members`.
 
