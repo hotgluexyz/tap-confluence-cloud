@@ -82,6 +82,58 @@ def test_parquet_strings_preserve_metadata_and_intersect_permission_layers():
     )
 
 
+def test_empty_page_body_falls_back_to_title_for_coveo_data():
+    source = {
+        **page(),
+        "title": "Untitled live doc 2026-10-22",
+        "body": json.dumps({"storage": {"representation": "storage", "value": ""}}),
+    }
+    result = etl.transform(pd.DataFrame([source]), "pages").to_dict("records")[0]
+    assert result["data"] == "Untitled live doc 2026-10-22"
+
+
+def test_access_class_virtual_groups_omitted_when_concrete_readers_exist():
+    space = [
+        {
+            "principal": {"type": "access-class", "id": "ALL_LICENSED_USERS"},
+            "operation": {"key": "read", "targetType": "space"},
+        },
+        {
+            "principal": {"type": "access-class", "id": "ALL_PRODUCT_ADMINS"},
+            "operation": {"key": "read", "targetType": "space"},
+        },
+        {
+            "principal": {"type": "user", "id": "712020:jacob"},
+            "operation": {"key": "read", "targetType": "space"},
+        },
+        {
+            "principal": {"type": "user", "id": "712020:no-access"},
+            "operation": {"key": "read", "targetType": "space"},
+        },
+    ]
+    sets = etl.permissions(space, [])
+    assert sets == [
+        {
+            "allowAnonymous": False,
+            "allowedPermissions": [
+                {"identity": "712020:jacob", "identityType": "User"},
+                {"identity": "712020:no-access", "identityType": "User"},
+            ],
+        }
+    ]
+
+
+def test_access_class_only_space_permissions_fail_closed():
+    space = [
+        {
+            "principal": {"type": "access-class", "id": "ALL_LICENSED_USERS"},
+            "operation": {"key": "read", "targetType": "space"},
+        }
+    ]
+    with pytest.raises(ValueError, match="No concrete space readers"):
+        etl.permissions(space, [])
+
+
 @pytest.mark.parametrize(
     "change",
     [

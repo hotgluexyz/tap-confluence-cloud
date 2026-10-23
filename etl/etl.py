@@ -98,15 +98,27 @@ def identity(principal_type, principal_id, *, provider=None):
     return entry
 
 
+def _concrete_space_readers(space_permissions, *, provider=None):
+    """Map space read grants to Coveo identities, omitting unresolved access-class/role VirtualGroups."""
+    readers = []
+    for permission in space_permissions:
+        if permission["operation"] != {"key": "read", "targetType": "space"}:
+            continue
+        principal = permission["principal"]
+        if principal["type"] in ("access-class", "role"):
+            continue
+        readers.append(identity(principal["type"], principal["id"], provider=provider))
+    if not readers:
+        raise ValueError(
+            "No concrete space readers after omitting access-class/role principals; "
+            "refusing unresolved VirtualGroups"
+        )
+    return readers
+
+
 def permissions(space_permissions, restrictions, *, provider=None):
     """Coveo simplified permission sets intersect space + every ancestor/page gate."""
-    readers = [
-        identity(p["principal"]["type"], p["principal"]["id"], provider=provider)
-        for p in space_permissions
-        if p["operation"] == {"key": "read", "targetType": "space"}
-    ]
-    if not readers:
-        raise ValueError("No readable space permission model; refusing to default to public")
+    readers = _concrete_space_readers(space_permissions, provider=provider)
     sets = [{"allowAnonymous": False, "allowedPermissions": readers}]
     for layer in restrictions:
         allowed = [
@@ -211,6 +223,8 @@ def transform(df: pd.DataFrame, stream: str, *, acl_context: dict | None = None)
         }
         if stream == "pages":
             body = nested(source["body"], dict)["storage"]["value"]
+            if not body:
+                body = title
             author = nested(source["author"], dict)
             properties = nested(source["properties"], list)
             document.update(

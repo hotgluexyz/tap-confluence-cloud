@@ -19,8 +19,13 @@ Python 3.10. Connector repositories: `hotgluexyz/tap-confluence-cloud` and
 Leave `synthetic_acl_demo` **disabled**. The ETL:
 
 1. Maps live `space_permissions` + `read_restrictions` onto Coveo `permissions`.
-2. Tags every identity with `securityProvider` (SIP id).
-3. Emits `SecurityIdentities` when the tap provides `users` / `groups` / `group_members`.
+2. Omits Confluence `access-class` / `role` principals (Coveo VirtualGroups that are never synced). Space ACLs must include concrete users and/or groups (Jacob, Jacob No Access, Coveo Demo Engineering). If only access-class grants remain, the ETL fails closed.
+3. Tags every identity with `securityProvider` (SIP id).
+4. Emits `SecurityIdentities` when the tap provides `users` / `groups` / `group_members`.
+
+### Confluence space cleanup (manual)
+
+In the demo space space permissions UI, remove “all licensed users” / product-admin style grants if present. Keep explicit readers: Jacob (`jacob@hotglue.io`), Jacob No Access (`collegejakemaz@gmail.com`), and group **Coveo Demo Engineering**. Do not change administrator permissions via automation.
 
 ### `synthetic_acl_demo` (opt-in, keep off with Premium)
 
