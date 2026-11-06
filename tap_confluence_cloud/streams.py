@@ -4,6 +4,8 @@ import base64
 from typing import Any, ClassVar, cast
 from urllib.parse import quote
 
+from hotglue_singer_sdk.exceptions import FatalAPIError
+
 from tap_confluence_cloud.client import ConfluenceCloudStream
 
 
@@ -275,16 +277,23 @@ class GroupMembersStream(ConfluenceCloudStream):
         start = 0
         limit = self.config["page_size"]
         while True:
-            response = self.get_response(
-                f"/wiki/rest/api/group/{quote(group_id, safe='')}/membersByGroupId",
-                {"start": start, "limit": limit},
-            )
-            if response.status_code in (401, 403):
-                raise ValueError(
-                    "Confluence denied group membership extraction for "
-                    f"{group_id}; Atlassian Free/admin permissions may block "
-                    "membersByGroupId. Refusing to simulate membership."
+            try:
+                response = self.get_response(
+                    f"/wiki/rest/api/group/{quote(group_id, safe='')}/membersByGroupId",
+                    {"start": start, "limit": limit},
                 )
+            except FatalAPIError as exc:
+                # Atlassian often 403s membersByGroupId without org-admin scopes.
+                # Emit the group shell with no members rather than failing the job.
+                if "401" in str(exc) or "403" in str(exc):
+                    self.logger.warning(
+                        "Confluence denied group membership for %s (%s); "
+                        "continuing with an empty member list",
+                        group_id,
+                        exc,
+                    )
+                    return
+                raise
             data = response.json()
             results = data["results"]
             for member in results:
