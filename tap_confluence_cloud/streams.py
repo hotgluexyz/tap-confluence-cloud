@@ -219,9 +219,11 @@ class GroupsStream(ConfluenceCloudStream):
     }
 
     def _groups(self):
+        # group_ids are authoritative — no picker call (picker often 403s without
+        # admin scopes). Coveo identity sync keys groups by id, not display name.
         seen = {}
         for group_id in self.config.get("group_ids", []):
-            seen[group_id] = {"id": group_id, "name": None}
+            seen[group_id] = {"id": group_id, "name": group_id}
         for name in self.config.get("group_names", []):
             matches = [
                 group
@@ -234,25 +236,6 @@ class GroupsStream(ConfluenceCloudStream):
                 raise ValueError(f"Confluence group not found by name: {name}")
             group = matches[0]
             seen[group["id"]] = {
-                "id": group["id"],
-                "name": group["name"],
-                "managedBy": group.get("managedBy"),
-                "usageType": group.get("usageType"),
-            }
-        for group_id, partial in list(seen.items()):
-            if partial.get("name"):
-                continue
-            matches = [
-                group
-                for group in self.get_response(
-                    "/wiki/rest/api/group/picker", {"query": group_id}
-                ).json()["results"]
-                if group["id"] == group_id
-            ]
-            if not matches:
-                raise ValueError(f"Confluence group not found by id: {group_id}")
-            group = matches[0]
-            seen[group_id] = {
                 "id": group["id"],
                 "name": group["name"],
                 "managedBy": group.get("managedBy"),
